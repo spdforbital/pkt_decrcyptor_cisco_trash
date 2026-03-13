@@ -26,29 +26,41 @@ That's it. Everything else is Python 3 stdlib (`zlib`, `struct`, `xml.etree`).
 
 ---
 
-## How the .pkt encryption works
+## How the .pkt Decryption Works
 
-Packet Tracer 9.0 `.pkt` files are encrypted with this pipeline:
+Cisco Packet Tracer (`.pkt` or `.pka`) files use a multi-stage pipeline to secure the underlying XML data. Decryption reverses this process in four main stages:
 
+### Stage 1: Initial Deobfuscation (Reverse XOR)
+The file starts as a binary blob where bytes are scrambled based on the file length.
+- **Algorithm:** Each byte `b[i]` is calculated by taking the byte at index `length - i - 1` and XORing it with `(length - i * length) & 0xFF`.
+- **Purpose:** Restores the encrypted Twofish ciphertext.
+
+### Stage 2: Twofish EAX Decryption
+The core security layer uses the **Twofish** block cipher in **EAX mode**.
+- **Key:** Fixed 16-byte key: `[137] * 16` (`0x89` hex).
+- **IV:** Fixed 16-byte IV: `[16] * 16` (`0x10` hex).
+- **Authentication:** Verifies the 16-byte CMAC tag at the end of the data to ensure integrity.
+
+### Stage 3: Secondary Deobfuscation (XOR)
+The underlying data is still obfuscated to hide the compression headers.
+- **Algorithm:** `b[i] = a[i] ^ ((length - i) & 0xFF)`.
+- **Purpose:** Reverses the obfuscation applied after compression.
+
+### Stage 4: Qt/Zlib Decompression
+The final step extracts the raw XML using the standard Qt `qCompress` format.
+- **Header:** 4-byte big-endian integer for the uncompressed size.
+- **Payload:** Standard **zlib** compressed data.
+
+### Summary Flowchart
+```mermaid
+graph TD
+    A[.pkt File Binary] --> B[Stage 1: Reverse XOR Obfuscation]
+    B --> C[Stage 2: Twofish EAX Decryption]
+    C --> D[Stage 3: XOR Deobfuscation]
+    D --> E[Stage 4: Qt/Zlib Decompression]
+    E --> F[Plaintext XML]
 ```
-┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐
-│  Raw XML  │ ──→ │ zlib compress │ ──→ │ XOR obfuscate│ ──→ │ Twofish  │
-│           │     │ (Qt format)  │     │ (stage 2)    │     │ EAX enc  │
-└──────────┘     └──────────────┘     └──────────────┘     └────┬─────┘
-                                                                │
-                                                          ┌─────┴──────┐
-                                                          │XOR obfusc. │
-                                                          │ (stage 4)  │
-                                                          └─────┬──────┘
-                                                                │
-                                                           .pkt file
-```
 
-**Decryption** reverses this:
-1. **Deobfuscate** (XOR with index-derived values — reverses stage 4)
-2. **Twofish EAX decrypt** (key = `0x89` × 16, iv = `0x10` × 16)
-3. **Deobfuscate** (XOR — reverses stage 2)
-4. **Qt decompress** (4-byte BE size header + raw zlib)
 
 ---
 
